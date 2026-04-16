@@ -292,6 +292,41 @@ validate_claude_cli() {
     fi
 }
 
+# Derive a human-readable Claude session name from the session id by reading
+# the first user prompt out of the transcript file. Returns empty on any
+# failure (missing jq, missing transcript, etc.) — callers must handle that.
+derive_claude_session_name() {
+    local session_id="$1"
+    local projects_dir="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+    local transcript name
+
+    if [ -z "$session_id" ] || ! command -v jq >/dev/null 2>&1 || [ ! -d "$projects_dir" ]; then
+        return 0
+    fi
+
+    transcript=$(find "$projects_dir" -type f -name "${session_id}.jsonl" -print -quit 2>/dev/null)
+    if [ -z "$transcript" ] || [ ! -f "$transcript" ]; then
+        return 0
+    fi
+
+    name=$(jq -r '
+        select(.type == "user" and .message?.content != null)
+        | ( .message.content
+            | if type == "string" then .
+              elif type == "array" then
+                ( map(select(.type == "text") | .text) | join(" ") )
+              else "" end )
+        | select(length > 0)
+    ' "$transcript" 2>/dev/null | head -n 1 | tr '\n\t' '  ')
+
+    # Sanitize for tmux: keep alnum/_/-, collapse runs of dashes, trim, truncate.
+    name=$(printf '%s' "$name" | tr -c '[:alnum:]_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
+    name="${name:0:40}"
+    name=$(printf '%s' "$name" | sed 's/-$//')
+
+    printf '%s' "$name"
+}
+
 # Function to show help
 show_help() {
     cat << EOF
@@ -308,8 +343,10 @@ OPTIONS:
     -f, --foreground      Run the resumed Claude session in the foreground
                           (default: run detached in a tmux session)
     --tmux-session NAME   Use NAME as the tmux session name.
-                          Default: Claude session id when -r is used, otherwise
-                          auto-generated name of the form claude-resume-<ts>-<pid>.
+                          Default when -r is used: <session-name>-<session-id>
+                          (session-name derived from the Claude transcript;
+                          falls back to <session-id> alone if unavailable).
+                          Default otherwise: claude-resume-<ts>-<pid>.
     -h, --help           Show this help
     -v, --version        Show version information
     --check              Show system check information
@@ -727,11 +764,18 @@ if [ -n "$LIMIT_MSG" ]; then
     if [ "$BACKGROUND_MODE" = true ]; then
       # Launch inside a detached tmux session so the resumed run is not tied
       # to the lifetime of this shell (useful for long-running tasks on Ubuntu).
-      # Default tmux session name == Claude session id when one is known.
-      # (-r provides it explicitly; for -c / new-session there is no id yet.)
+      # Default tmux session name for -r: "<session-name>-<session-id>" where
+      # <session-name> is derived from the Claude transcript's first user
+      # prompt (falls back to just <session-id> if the name can't be derived).
+      # For -c / new sessions there is no id yet, so use a timestamp.
       if [ -z "$TMUX_SESSION_NAME" ]; then
         if [ -n "$RESUME_SESSION_ID" ]; then
-          TMUX_SESSION_NAME="$RESUME_SESSION_ID"
+          CLAUDE_SESSION_NAME=$(derive_claude_session_name "$RESUME_SESSION_ID")
+          if [ -n "$CLAUDE_SESSION_NAME" ]; then
+            TMUX_SESSION_NAME="${CLAUDE_SESSION_NAME}-${RESUME_SESSION_ID}"
+          else
+            TMUX_SESSION_NAME="$RESUME_SESSION_ID"
+          fi
         else
           TMUX_SESSION_NAME="claude-resume-$(date +%Y%m%d-%H%M%S)-$$"
         fi

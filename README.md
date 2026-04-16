@@ -166,8 +166,10 @@ claude-auto-resume "implement user authentication"
 # Continue the previous conversation in the background.
 claude-auto-resume -c "keep going"
 
-# Resume a specific Claude session id. The tmux session name will be the
-# Claude session id itself, so it's easy to correlate the two.
+# Resume a specific Claude session id. The tmux session name will be
+# "<session-name>-<session-id>" — the <session-name> is derived from the
+# first user prompt in the Claude transcript (requires jq) and falls back
+# to just <session-id> if the name can't be resolved.
 claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "finish refactor"
 
 # Opt out: run the resumed Claude session in the current terminal instead.
@@ -241,7 +243,7 @@ chmod +x claude-auto-resume.sh
 - **-e, --execute**: Execute custom shell command after wait period (e.g., `claude-auto-resume -e "npm run dev"`)
 - **--cmd**: Alias for -e/--execute (e.g., `claude-auto-resume --cmd "python app.py"`)
 - **-f, --foreground**: Run the resumed Claude session in the current terminal instead of a background tmux session (default is background)
-- **--tmux-session NAME**: Use NAME as the tmux session name (default: Claude session id when `-r` is used, otherwise `claude-resume-<timestamp>-<pid>`)
+- **--tmux-session NAME**: Use NAME as the tmux session name. Default with `-r`: `<session-name>-<session-id>` where `<session-name>` is derived from the Claude transcript (requires `jq`; falls back to `<session-id>` alone). Otherwise: `claude-resume-<timestamp>-<pid>`.
 - **--test-mode**: [DEV] Simulate usage limit with specified wait time in seconds
 - **-h, --help**: Show help message and usage examples
 - **-v, --version**: Show version information
