@@ -159,11 +159,12 @@ closing your terminal or SSH session. Install tmux on Ubuntu with
 to foreground mode with a warning.
 
 ```bash
-# Default: wait for the limit to lift, then resume in a detached tmux session.
-# The session name is auto-generated (claude-resume-<timestamp>-<pid>).
-claude-auto-resume "implement user authentication"
+# Starting a BRAND-NEW Claude session in background mode requires a
+# --tmux-session name so you can identify the backgrounded run later.
+claude-auto-resume --tmux-session implement-auth "implement user authentication"
 
-# Continue the previous conversation in the background.
+# Continue the previous conversation in the background. No name required;
+# the tmux session auto-names as claude-resume-<timestamp>-<pid>.
 claude-auto-resume -c "keep going"
 
 # Resume a specific Claude session id. The tmux session name will be
@@ -243,7 +244,7 @@ chmod +x claude-auto-resume.sh
 - **-e, --execute**: Execute custom shell command after wait period (e.g., `claude-auto-resume -e "npm run dev"`)
 - **--cmd**: Alias for -e/--execute (e.g., `claude-auto-resume --cmd "python app.py"`)
 - **-f, --foreground**: Run the resumed Claude session in the current terminal instead of a background tmux session (default is background)
-- **--tmux-session NAME**: Use NAME as the tmux session name. Default with `-r`: `<session-name>-<session-id>` where `<session-name>` is derived from the Claude transcript (requires `jq`; falls back to `<session-id>` alone). Otherwise: `claude-resume-<timestamp>-<pid>`.
+- **--tmux-session NAME**: Use NAME as the tmux session name. **Required when starting a brand-new Claude session in background mode** (no `-r`, `-c`, or `-f`). Default with `-r`: `<session-name>-<session-id>` where `<session-name>` is derived from the Claude transcript (requires `jq`; falls back to `<session-id>` alone). Default with `-c`: `claude-resume-<timestamp>-<pid>`.
 - **--test-mode**: [DEV] Simulate usage limit with specified wait time in seconds
 - **-h, --help**: Show help message and usage examples
 - **-v, --version**: Show version information

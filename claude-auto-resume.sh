@@ -343,10 +343,12 @@ OPTIONS:
     -f, --foreground      Run the resumed Claude session in the foreground
                           (default: run detached in a tmux session)
     --tmux-session NAME   Use NAME as the tmux session name.
+                          Required when starting a new Claude session in
+                          background mode (no -r, -c, or -f).
                           Default when -r is used: <session-name>-<session-id>
                           (session-name derived from the Claude transcript;
                           falls back to <session-id> alone if unavailable).
-                          Default otherwise: claude-resume-<ts>-<pid>.
+                          Default when -c is used: claude-resume-<ts>-<pid>.
     -h, --help           Show this help
     -v, --version        Show version information
     --check              Show system check information
@@ -583,6 +585,21 @@ if [ "$BACKGROUND_MODE" = true ] && [ "$EXECUTE_MODE" = false ]; then
         echo "[INFO] Falling back to foreground mode for this run."
         BACKGROUND_MODE=false
     fi
+fi
+
+# Require an explicit tmux session name when starting a brand-new Claude
+# session in background mode. -r supplies a session id we can reuse; -c
+# continues an existing conversation; but a fresh session has no identifier
+# of its own, so we force the user to label the tmux session.
+if [ "$BACKGROUND_MODE" = true ] \
+   && [ "$EXECUTE_MODE" = false ] \
+   && [ -z "$RESUME_SESSION_ID" ] \
+   && [ "$USE_CONTINUE_FLAG" = false ] \
+   && [ -z "$TMUX_SESSION_NAME" ]; then
+    echo "[ERROR] A tmux session name is required when starting a new Claude session in background mode."
+    echo "[HINT] Provide one with --tmux-session NAME, or pass -f/--foreground to skip tmux."
+    echo "[EXAMPLE] claude-auto-resume --tmux-session my-feature \"implement login\""
+    exit 1
 fi
 
 # Check network connectivity before proceeding
