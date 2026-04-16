@@ -10,6 +10,8 @@ VERSION="1.5.0"
 DEFAULT_PROMPT="continue"
 # Default is to start new session (no -c flag)
 USE_CONTINUE_FLAG=false
+# Resume from a specific session id (claude --resume <id>)
+RESUME_SESSION_ID=""
 # Custom command execution mode
 EXECUTE_MODE=false
 CUSTOM_COMMAND=""
@@ -296,6 +298,7 @@ Automatically resume Claude CLI tasks after usage limits are lifted.
 OPTIONS:
     -p, --prompt PROMPT    Custom prompt (default: "continue")
     -c, --continue        Continue previous conversation
+    -r, --resume SESSION_ID  Resume a specific Claude session by its session ID
     -e, --execute COMMAND  Execute custom command after usage limit wait period
     --cmd COMMAND         Execute custom command after usage limit wait period (alias for -e)
     -h, --help           Show this help
@@ -308,6 +311,8 @@ EXAMPLES:
     claude-auto-resume "implement feature"
     claude-auto-resume -c "continue task"
     claude-auto-resume -p "write tests"
+    claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "continue"
+    claude-auto-resume --resume 550e8400-e29b-41d4-a716-446655440000 -p "finish refactor"
     claude-auto-resume -e "npm run dev"     # Executes after usage limit wait
     claude-auto-resume --cmd "python app.py"  # Executes after usage limit wait
     claude-auto-resume --test-mode 10 -e "echo test"  # [DEV] Test with 10s wait
@@ -337,6 +342,16 @@ while [[ $# -gt 0 ]]; do
         -c|--continue)
             USE_CONTINUE_FLAG=true
             shift
+            ;;
+        -r|--resume)
+            if [ -z "$2" ]; then
+                echo "[ERROR] Option $1 requires a session ID argument."
+                echo "[HINT] Provide a Claude session ID after $1 flag."
+                echo "[SUGGESTION] Example: claude-auto-resume $1 550e8400-e29b-41d4-a716-446655440000"
+                exit 1
+            fi
+            RESUME_SESSION_ID="$2"
+            shift 2
             ;;
         -e|--execute|--cmd)
             if [ -z "$2" ]; then
@@ -455,6 +470,20 @@ done
 if [ "$EXECUTE_MODE" = true ] && [ "$USE_CONTINUE_FLAG" = true ]; then
     echo "[ERROR] Cannot use both custom command execution (-e/--execute/--cmd) and continue flag (-c/--continue)."
     echo "[HINT] Choose either Claude conversation continuation or custom command execution."
+    echo "[SUGGESTION] Use 'claude-auto-resume --help' to see usage examples."
+    exit 1
+fi
+
+if [ "$EXECUTE_MODE" = true ] && [ -n "$RESUME_SESSION_ID" ]; then
+    echo "[ERROR] Cannot use both custom command execution (-e/--execute/--cmd) and resume flag (-r/--resume)."
+    echo "[HINT] Choose either Claude session resume or custom command execution."
+    echo "[SUGGESTION] Use 'claude-auto-resume --help' to see usage examples."
+    exit 1
+fi
+
+if [ "$USE_CONTINUE_FLAG" = true ] && [ -n "$RESUME_SESSION_ID" ]; then
+    echo "[ERROR] Cannot use both continue flag (-c/--continue) and resume flag (-r/--resume)."
+    echo "[HINT] Use -c to continue the most recent conversation or -r to resume a specific session ID."
     echo "[SUGGESTION] Use 'claude-auto-resume --help' to see usage examples."
     exit 1
 fi
@@ -634,7 +663,13 @@ if [ -n "$LIMIT_MSG" ]; then
     fi
     echo "Custom command has been executed successfully."
   else
-    if [ "$USE_CONTINUE_FLAG" = true ]; then
+    if [ -n "$RESUME_SESSION_ID" ]; then
+      echo "Automatically resuming Claude session '$RESUME_SESSION_ID' with prompt: '$CUSTOM_PROMPT'"
+      CLAUDE_PID=""
+      CLAUDE_OUTPUT2=$(claude --resume "$RESUME_SESSION_ID" --dangerously-skip-permissions -p "$CUSTOM_PROMPT" 2>&1)
+      RET_CODE2=$?
+      CLAUDE_PID=""
+    elif [ "$USE_CONTINUE_FLAG" = true ]; then
       echo "Automatically continuing previous Claude conversation with prompt: '$CUSTOM_PROMPT'"
       CLAUDE_PID=""
       CLAUDE_OUTPUT2=$(claude -c --dangerously-skip-permissions -p "$CUSTOM_PROMPT" 2>&1)
