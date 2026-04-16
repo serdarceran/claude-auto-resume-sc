@@ -162,6 +162,9 @@ chmod +x claude-auto-resume.sh
 # Continue previous conversation
 ./claude-auto-resume.sh -c "continue with the implementation"
 
+# Resume a specific session by ID
+./claude-auto-resume.sh -r 550e8400-e29b-41d4-a716-446655440000 "continue"
+
 # Execute custom command after wait period
 ./claude-auto-resume.sh -e "make build"
 ```
@@ -175,6 +178,7 @@ chmod +x claude-auto-resume.sh
 5. **Auto Resume**: Automatically execute either:
    - `claude --dangerously-skip-permissions -p "<custom-prompt>"` (new session, default)
    - `claude -c --dangerously-skip-permissions -p "<custom-prompt>"` (continue conversation with -c flag)
+   - `claude --resume <session-id> --dangerously-skip-permissions -p "<custom-prompt>"` (resume a specific session with -r flag)
    - Custom shell command with `-e/--execute` or `--cmd` flags
 
 ## Command Line Options
@@ -183,6 +187,7 @@ chmod +x claude-auto-resume.sh
 - **Single argument**: Start new session with custom prompt (e.g., `claude-auto-resume "implement feature"`)
 - **-p, --prompt**: Specify custom prompt with flag (e.g., `claude-auto-resume -p "write tests"`)
 - **-c, --continue**: Continue previous conversation (adds -c flag to claude command)
+- **-r, --resume SESSION_ID**: Resume a specific Claude session by ID (e.g., `claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "continue"`)
 - **-e, --execute**: Execute custom shell command after wait period (e.g., `claude-auto-resume -e "npm run dev"`)
 - **--cmd**: Alias for -e/--execute (e.g., `claude-auto-resume --cmd "python app.py"`)
 - **--test-mode**: [DEV] Simulate usage limit with specified wait time in seconds
@@ -206,6 +211,14 @@ Uses `claude -c` to continue the last conversation:
 claude-auto-resume -c "keep going"           # Continue with custom prompt
 claude-auto-resume -c -p "resume work"       # Continue with flag
 ```
+
+### Resume a Specific Session by ID
+Uses `claude --resume <session-id>` to pick up a particular past session:
+```bash
+claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "continue"
+claude-auto-resume --resume 550e8400-e29b-41d4-a716-446655440000 -p "finish the refactor"
+```
+Note: `-r/--resume` cannot be combined with `-c/--continue` or `-e/--execute`.
 
 ### Execute Custom Commands
 Execute any shell command after the wait period:
