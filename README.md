@@ -170,9 +170,6 @@ claude-auto-resume -c "keep going"
 # Claude session id itself, so it's easy to correlate the two.
 claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "finish refactor"
 
-# Pick your own tmux session name.
-claude-auto-resume --tmux-session my-task "write tests"
-
 # Opt out: run the resumed Claude session in the current terminal instead.
 claude-auto-resume -f "continue"
 claude-auto-resume --foreground -c "resume where we left off"
