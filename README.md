@@ -143,9 +143,67 @@ claude-auto-resume -e "npm run dev"
 # Execute custom command with alias flag
 claude-auto-resume --cmd "python app.py"
 
+# Run the resumed session in the foreground (disable default tmux backgrounding)
+claude-auto-resume -f "continue"
+
 # Show help
 claude-auto-resume --help
 ```
+
+### Background Resume with tmux (Default on Linux/Ubuntu)
+
+By default, once the usage-limit wait is over, the resumed Claude run is
+launched inside a **detached tmux session** so long-running tasks survive
+closing your terminal or SSH session. Install tmux on Ubuntu with
+`sudo apt-get install -y tmux` — if tmux is missing the script falls back
+to foreground mode with a warning.
+
+```bash
+# Starting a BRAND-NEW Claude session in background mode requires a
+# --tmux-session name so you can identify the backgrounded run later.
+claude-auto-resume --tmux-session implement-auth "implement user authentication"
+
+# Continue the previous conversation in the background. No name required;
+# the tmux session auto-names as claude-resume-<timestamp>-<pid>.
+claude-auto-resume -c "keep going"
+
+# Resume a specific Claude session id. The tmux session name will be
+# "<session-name>-<session-id>" — the <session-name> is derived from the
+# first user prompt in the Claude transcript (requires jq) and falls back
+# to just <session-id> if the name can't be resolved.
+claude-auto-resume -r 550e8400-e29b-41d4-a716-446655440000 "finish refactor"
+
+# Opt out: run the resumed Claude session in the current terminal instead.
+claude-auto-resume -f "continue"
+claude-auto-resume --foreground -c "resume where we left off"
+```
+
+While the Claude run is executing in the background, use standard tmux
+commands to interact with it:
+
+```bash
+# List all running tmux sessions
+tmux ls
+
+# Attach to watch the Claude run live
+tmux attach -t <session-name>
+
+# Detach from an attached session without stopping it
+#   press: Ctrl+b  then  d
+
+# Tail the log file written by the backgrounded run
+tail -f /tmp/<session-name>.log
+
+# Stop a background session
+tmux kill-session -t <session-name>
+```
+
+Notes:
+- `remain-on-exit` is enabled on the tmux session, so you can still attach
+  and inspect the final output after the Claude command finishes.
+- Each backgrounded run also writes a log to `/tmp/<session-name>.log`.
+- `-e/--execute` (custom commands) still runs in the foreground; the tmux
+  default only applies to the Claude resume path.
 
 ### Local Usage (Before Installation)
 
@@ -185,6 +243,8 @@ chmod +x claude-auto-resume.sh
 - **-c, --continue**: Continue previous conversation (adds -c flag to claude command)
 - **-e, --execute**: Execute custom shell command after wait period (e.g., `claude-auto-resume -e "npm run dev"`)
 - **--cmd**: Alias for -e/--execute (e.g., `claude-auto-resume --cmd "python app.py"`)
+- **-f, --foreground**: Run the resumed Claude session in the current terminal instead of a background tmux session (default is background)
+- **--tmux-session NAME**: Use NAME as the tmux session name. **Required when starting a brand-new Claude session in background mode** (no `-r`, `-c`, or `-f`). Default with `-r`: `<session-name>-<session-id>` where `<session-name>` is derived from the Claude transcript (requires `jq`; falls back to `<session-id>` alone). Default with `-c`: `claude-resume-<timestamp>-<pid>`.
 - **--test-mode**: [DEV] Simulate usage limit with specified wait time in seconds
 - **-h, --help**: Show help message and usage examples
 - **-v, --version**: Show version information
@@ -228,6 +288,7 @@ claude-auto-resume --test-mode 10 --cmd "npm run test"       # Test build proces
 
 - **Claude CLI**: Must be installed and available in PATH
 - **Standard Unix Tools**: `grep`, `date`, `sleep`, `awk` (usually pre-installed)
+- **tmux** (optional, Linux/macOS): required for the default backgrounded resume. Install on Ubuntu with `sudo apt-get install -y tmux`. Without tmux the script automatically falls back to foreground mode.
 - **Windows**: PowerShell 5.1+ or PowerShell 7+ (when using the Windows script)
 
 ## Security Considerations

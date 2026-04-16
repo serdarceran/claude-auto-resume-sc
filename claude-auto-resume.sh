@@ -19,6 +19,10 @@ CUSTOM_COMMAND=""
 TEST_MODE=false
 TEST_WAIT_SECONDS=0
 TEST_MESSAGE_TYPE="old"  # "old" for timestamp format, "new" for time format
+# Background mode: when true, resume Claude inside a detached tmux session
+BACKGROUND_MODE=true
+# Optional explicit tmux session name (auto-generated when empty)
+TMUX_SESSION_NAME=""
 
 # Cleanup function for graceful termination
 cleanup_on_exit() {
@@ -288,6 +292,41 @@ validate_claude_cli() {
     fi
 }
 
+# Derive a human-readable Claude session name from the session id by reading
+# the first user prompt out of the transcript file. Returns empty on any
+# failure (missing jq, missing transcript, etc.) — callers must handle that.
+derive_claude_session_name() {
+    local session_id="$1"
+    local projects_dir="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+    local transcript name
+
+    if [ -z "$session_id" ] || ! command -v jq >/dev/null 2>&1 || [ ! -d "$projects_dir" ]; then
+        return 0
+    fi
+
+    transcript=$(find "$projects_dir" -type f -name "${session_id}.jsonl" -print -quit 2>/dev/null)
+    if [ -z "$transcript" ] || [ ! -f "$transcript" ]; then
+        return 0
+    fi
+
+    name=$(jq -r '
+        select(.type == "user" and .message?.content != null)
+        | ( .message.content
+            | if type == "string" then .
+              elif type == "array" then
+                ( map(select(.type == "text") | .text) | join(" ") )
+              else "" end )
+        | select(length > 0)
+    ' "$transcript" 2>/dev/null | head -n 1 | tr '\n\t' '  ')
+
+    # Sanitize for tmux: keep alnum/_/-, collapse runs of dashes, trim, truncate.
+    name=$(printf '%s' "$name" | tr -c '[:alnum:]_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
+    name="${name:0:40}"
+    name=$(printf '%s' "$name" | sed 's/-$//')
+
+    printf '%s' "$name"
+}
+
 # Function to show help
 show_help() {
     cat << EOF
@@ -301,6 +340,15 @@ OPTIONS:
     -r, --resume SESSION_ID  Resume a specific Claude session by its session ID
     -e, --execute COMMAND  Execute custom command after usage limit wait period
     --cmd COMMAND         Execute custom command after usage limit wait period (alias for -e)
+    -f, --foreground      Run the resumed Claude session in the foreground
+                          (default: run detached in a tmux session)
+    --tmux-session NAME   Use NAME as the tmux session name.
+                          Required when starting a new Claude session in
+                          background mode (no -r, -c, or -f).
+                          Default when -r is used: <session-name>-<session-id>
+                          (session-name derived from the Claude transcript;
+                          falls back to <session-id> alone if unavailable).
+                          Default when -c is used: claude-resume-<ts>-<pid>.
     -h, --help           Show this help
     -v, --version        Show version information
     --check              Show system check information
@@ -315,6 +363,8 @@ EXAMPLES:
     claude-auto-resume --resume 550e8400-e29b-41d4-a716-446655440000 -p "finish refactor"
     claude-auto-resume -e "npm run dev"     # Executes after usage limit wait
     claude-auto-resume --cmd "python app.py"  # Executes after usage limit wait
+    claude-auto-resume -f "continue"        # Run resumed session in foreground
+    claude-auto-resume --tmux-session work "continue"  # Custom tmux session name
     claude-auto-resume --test-mode 10 -e "echo test"  # [DEV] Test with 10s wait
     claude-auto-resume --test-mode 5 --test-new-format "continue"  # [DEV] Test new format
 
@@ -362,6 +412,20 @@ while [[ $# -gt 0 ]]; do
             fi
             EXECUTE_MODE=true
             CUSTOM_COMMAND="$2"
+            shift 2
+            ;;
+        -f|--foreground)
+            BACKGROUND_MODE=false
+            shift
+            ;;
+        --tmux-session)
+            if [ -z "$2" ]; then
+                echo "[ERROR] Option $1 requires a session name argument."
+                echo "[HINT] Provide a tmux session name after $1 flag."
+                echo "[SUGGESTION] Example: claude-auto-resume $1 my-claude-session"
+                exit 1
+            fi
+            TMUX_SESSION_NAME="$2"
             shift 2
             ;;
         -h|--help)
@@ -434,6 +498,18 @@ while [[ $# -gt 0 ]]; do
             echo "  curl: $(command -v curl &> /dev/null && echo "Available" || echo "Not found")"
             echo "  wget: $(command -v wget &> /dev/null && echo "Available" || echo "Not found")"
             echo ""
+
+            # Background mode dependency check
+            echo "Background Mode (tmux):"
+            if command -v tmux &> /dev/null; then
+                echo "  tmux: Available ($(tmux -V))"
+                echo "  Default resume mode: background (detached tmux session)"
+            else
+                echo "  tmux: Not found"
+                echo "  Default resume mode: foreground (install tmux to enable background)"
+                echo "  Install on Ubuntu: sudo apt-get install -y tmux"
+            fi
+            echo ""
             
             # Environment validation
             echo "Environment Validation:"
@@ -498,6 +574,32 @@ fi
 # Validate Claude CLI environment before proceeding (skip if in execute mode)
 if [ "$EXECUTE_MODE" = false ]; then
     validate_claude_cli
+fi
+
+# Validate tmux availability when background mode is the chosen resume strategy.
+# Background mode only applies to the Claude resume path (not execute mode).
+if [ "$BACKGROUND_MODE" = true ] && [ "$EXECUTE_MODE" = false ]; then
+    if ! command -v tmux &> /dev/null; then
+        echo "[WARNING] tmux not found; the resumed session cannot be backgrounded."
+        echo "[HINT] Install tmux on Ubuntu with: sudo apt-get install -y tmux"
+        echo "[INFO] Falling back to foreground mode for this run."
+        BACKGROUND_MODE=false
+    fi
+fi
+
+# Require an explicit tmux session name when starting a brand-new Claude
+# session in background mode. -r supplies a session id we can reuse; -c
+# continues an existing conversation; but a fresh session has no identifier
+# of its own, so we force the user to label the tmux session.
+if [ "$BACKGROUND_MODE" = true ] \
+   && [ "$EXECUTE_MODE" = false ] \
+   && [ -z "$RESUME_SESSION_ID" ] \
+   && [ "$USE_CONTINUE_FLAG" = false ] \
+   && [ -z "$TMUX_SESSION_NAME" ]; then
+    echo "[ERROR] A tmux session name is required when starting a new Claude session in background mode."
+    echo "[HINT] Provide one with --tmux-session NAME, or pass -f/--foreground to skip tmux."
+    echo "[EXAMPLE] claude-auto-resume --tmux-session my-feature \"implement login\""
+    exit 1
 fi
 
 # Check network connectivity before proceeding
@@ -663,26 +765,88 @@ if [ -n "$LIMIT_MSG" ]; then
     fi
     echo "Custom command has been executed successfully."
   else
+    # Build the claude argument list once and dispatch to foreground or tmux
+    CLAUDE_ARGS=()
     if [ -n "$RESUME_SESSION_ID" ]; then
-      echo "Automatically resuming Claude session '$RESUME_SESSION_ID' with prompt: '$CUSTOM_PROMPT'"
-      CLAUDE_PID=""
-      CLAUDE_OUTPUT2=$(claude --resume "$RESUME_SESSION_ID" --dangerously-skip-permissions -p "$CUSTOM_PROMPT" 2>&1)
-      RET_CODE2=$?
-      CLAUDE_PID=""
+      CLAUDE_ARGS=(--resume "$RESUME_SESSION_ID" --dangerously-skip-permissions -p "$CUSTOM_PROMPT")
+      RESUME_DESCRIPTION="Claude session '$RESUME_SESSION_ID'"
     elif [ "$USE_CONTINUE_FLAG" = true ]; then
-      echo "Automatically continuing previous Claude conversation with prompt: '$CUSTOM_PROMPT'"
-      CLAUDE_PID=""
-      CLAUDE_OUTPUT2=$(claude -c --dangerously-skip-permissions -p "$CUSTOM_PROMPT" 2>&1)
-      RET_CODE2=$?
-      CLAUDE_PID=""
+      CLAUDE_ARGS=(-c --dangerously-skip-permissions -p "$CUSTOM_PROMPT")
+      RESUME_DESCRIPTION="previous Claude conversation"
     else
-      echo "Automatically starting new Claude session with prompt: '$CUSTOM_PROMPT'"
-      CLAUDE_PID=""
-      CLAUDE_OUTPUT2=$(claude --dangerously-skip-permissions -p "$CUSTOM_PROMPT" 2>&1)
-      RET_CODE2=$?
-      CLAUDE_PID=""
+      CLAUDE_ARGS=(--dangerously-skip-permissions -p "$CUSTOM_PROMPT")
+      RESUME_DESCRIPTION="new Claude session"
     fi
-    
+
+    if [ "$BACKGROUND_MODE" = true ]; then
+      # Launch inside a detached tmux session so the resumed run is not tied
+      # to the lifetime of this shell (useful for long-running tasks on Ubuntu).
+      # Default tmux session name for -r: "<session-name>-<session-id>" where
+      # <session-name> is derived from the Claude transcript's first user
+      # prompt (falls back to just <session-id> if the name can't be derived).
+      # For -c / new sessions there is no id yet, so use a timestamp.
+      if [ -z "$TMUX_SESSION_NAME" ]; then
+        if [ -n "$RESUME_SESSION_ID" ]; then
+          CLAUDE_SESSION_NAME=$(derive_claude_session_name "$RESUME_SESSION_ID")
+          if [ -n "$CLAUDE_SESSION_NAME" ]; then
+            TMUX_SESSION_NAME="${CLAUDE_SESSION_NAME}-${RESUME_SESSION_ID}"
+          else
+            TMUX_SESSION_NAME="$RESUME_SESSION_ID"
+          fi
+        else
+          TMUX_SESSION_NAME="claude-resume-$(date +%Y%m%d-%H%M%S)-$$"
+        fi
+      fi
+      TMUX_LOG_DIR="${TMPDIR:-/tmp}"
+      TMUX_LOG_FILE="${TMUX_LOG_DIR}/${TMUX_SESSION_NAME}.log"
+
+      # Refuse to clobber a live session with the same name.
+      if tmux has-session -t "$TMUX_SESSION_NAME" 2>/dev/null; then
+        echo "[ERROR] A tmux session named '$TMUX_SESSION_NAME' already exists."
+        echo "[HINT] Choose a different name with --tmux-session or kill it:"
+        echo "       tmux kill-session -t '$TMUX_SESSION_NAME'"
+        exit 4
+      fi
+
+      # Properly quote each argument for a shell command line that tmux will exec.
+      CLAUDE_CMD="claude"
+      for arg in "${CLAUDE_ARGS[@]}"; do
+        CLAUDE_CMD+=" $(printf '%q' "$arg")"
+      done
+      QUOTED_LOG=$(printf '%q' "$TMUX_LOG_FILE")
+      FULL_CMD="${CLAUDE_CMD} 2>&1 | tee ${QUOTED_LOG}; ec=\${PIPESTATUS[0]}; echo; echo \"[claude-auto-resume] exit code: \${ec}\""
+
+      echo "Automatically resuming ${RESUME_DESCRIPTION} in background tmux session."
+      echo "Prompt: '$CUSTOM_PROMPT'"
+
+      # -d = detached; remain-on-exit lets the user view output after claude exits.
+      if ! tmux new-session -d -s "$TMUX_SESSION_NAME" "$FULL_CMD"; then
+        echo "[ERROR] Failed to start tmux session '$TMUX_SESSION_NAME'."
+        exit 4
+      fi
+      tmux set-option -t "$TMUX_SESSION_NAME" remain-on-exit on >/dev/null 2>&1 || true
+
+      cat <<EOF
+
+✓ Claude is running in background tmux session: ${TMUX_SESSION_NAME}
+
+  Attach:   tmux attach -t ${TMUX_SESSION_NAME}
+  Detach:   press Ctrl+b then d (once attached)
+  Log:      tail -f ${TMUX_LOG_FILE}
+  List:     tmux ls
+  Kill:     tmux kill-session -t ${TMUX_SESSION_NAME}
+
+EOF
+      exit 0
+    fi
+
+    # Foreground path (original behavior)
+    echo "Automatically resuming ${RESUME_DESCRIPTION} with prompt: '$CUSTOM_PROMPT'"
+    CLAUDE_PID=""
+    CLAUDE_OUTPUT2=$(claude "${CLAUDE_ARGS[@]}" 2>&1)
+    RET_CODE2=$?
+    CLAUDE_PID=""
+
     if [ $RET_CODE2 -ne 0 ]; then
       echo "[ERROR] Claude CLI failed after resume."
       echo "[HINT] This may indicate authentication issues or service problems."
